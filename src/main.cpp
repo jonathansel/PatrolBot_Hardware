@@ -1,10 +1,11 @@
-/* TODO
- *  1. Improve robustness by calculating checksum/CRC - Using second marker now, this might be good enough
+/* @todo
+ *  1. Improve robustness by calculating checksum/CRC - good for when teensy has power but encoder doesnt. Getting false values at start
  *  2. if (rb != startMarker) feels sketchy. Missing one packet of data? - Using second marker now, this might be good enough - ADD CRC
- *  3. Shift out old bytes per markd833?
+ *  3. Shift out old bytes per markd833? 
  *  4. Angular rate required or not?
  *  5. PID Controller - implement integral term reset to avoid saturation in case of no movement for long durations. May not be a concern depending on Ki? 
  *  6. When both VESC and Roboclaw active, steering controller performance seems to decline (increased oscillations). Could be related to the noise? on TX. Digital isolator?  
+ *  7. Benefits of using whole range of PWM
  */
 
 #define USE_USBCON  //don't think this is required
@@ -30,11 +31,11 @@ int potValue; //pin A0
 int mode = 0;
 float steering_angle; 
 
-double Kp=15, Ki=0, Kd=0; //PID Gains
-double Setpoint = 0, Input, Output; //PID variables - changed to float
-PID PID1(&Input, &Output, &Setpoint, Kp, Kd, Ki, DIRECT); //PID Setup
+double Kp=14, Ki=3, Kd=0; //PID Gains
+double Setpoint = 0, Input, Output; //PID variables 
+PID PID1(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT); //PID Setup
 
-RoboClaw roboclaw(&Serial3,10000);
+RoboClaw roboclaw(&Serial3,10000); //DC Motor Controller Setup
 #define address 0x80
 
 const int switchPin = 5;
@@ -113,6 +114,7 @@ void showNewData() {
 }
 
 
+// Right turn had some instance where it was requesting 35deg rather than -35deg. Must have gotten in the wrong bounds
 void absToAngle() {
   // left turn side is towards 4069. Right turn side is towards 131. Less than 131 is a gltich on left turn side. 
   if(abs_pos<=65 || abs_pos>4069){ //less than 65 (inclusive) or 4069+. This only happens on left turn (i.e. -35 side)
@@ -128,12 +130,12 @@ void absToAngle() {
 void driveMotor(){
   // Turning to the left
   if(Output <= 0){
-    roboclaw.ForwardM1(address,abs(Output)); 
+    roboclaw.BackwardM1(address, abs(Output));
   }
 
   // Turning to the right
   if(Output > 0){
-    roboclaw.BackwardM1(address, Output);
+    roboclaw.ForwardM1(address,abs(Output));
   }
 }
 
@@ -155,7 +157,7 @@ void setup() {
   pinMode(switchPin, INPUT);
 
   PID1.SetMode(AUTOMATIC);              
-  PID1.SetOutputLimits(-45, 45); //True limit is 127 but don't want to go that fast, this is around 30% duty cycle.. may need to inverse this due to swapping angles
+  PID1.SetOutputLimits(-60, 60); //True limit is 127 but don't want to go that fast, this is around 30% duty cycle.. may need to inverse this due to swapping angles
   PID1.SetSampleTime(10); //10ms
 
   //vel array initialization
@@ -198,7 +200,7 @@ void loop() {
     debug_data.data[2] = Setpoint; //Raw absolute position of encoder
     debug_data.data[3] = Output; 
     debug_pub.publish(&debug_data); //publish current heading before movement
-
+    
     Input = currentHeading; 
 
     PID1.Compute();
