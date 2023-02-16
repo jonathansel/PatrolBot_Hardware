@@ -197,8 +197,8 @@ void loop() {
   if(mode == 1){
     debug_data.data[0] = currentHeading; //current heading - name this angle aswell
     debug_data.data[1] = steering_angle; //desired heading
-    debug_data.data[2] = Setpoint; //Raw absolute position of encoder
-    debug_data.data[3] = Output; 
+    debug_data.data[2] = abs_pos; //Raw absolute position of encoder
+    debug_data.data[3] = Output; //PWM
     debug_pub.publish(&debug_data); //publish current heading before movement
     
     Input = currentHeading; 
