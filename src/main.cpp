@@ -25,11 +25,10 @@ const byte numBytes = 12; //bytes per full message is 12 i.e. AA BB 01 FF 00 00 
 byte receivedBytes[numBytes];
 byte numReceived = 0;
 boolean newData = false;
-double abs_pos = 0;
-double currentHeading = 0;
-int potValue; //pin A0
-int mode = 0;
-float steering_angle; 
+double abs_pos = 0; //raw position from encoder
+double currentHeading = 0; //calculated current heading of robot
+int mode = 0; //for onboard switch
+float steering_angle; //variable used in ackermann callback
 
 double Kp=14, Ki=3, Kd=0; //PID Gains
 double Setpoint = 0, Input, Output; //PID variables 
@@ -40,8 +39,8 @@ RoboClaw roboclaw(&Serial3,10000); //DC Motor Controller Setup
 
 const int switchPin = 5;
 
-const float MIN_STEERING_ANGLE = -35;       // min steering angle (0-180)
-const float MAX_STEERING_ANGLE = 35;      // max steering angle (0-180)
+const float MIN_STEERING_ANGLE = -30;       // min steering angle (0-180)
+const float MAX_STEERING_ANGLE = 30;      // max steering angle (0-180)
 
 void ackermannCallback(const ackermann_msgs::AckermannDriveStamped & ackermann) {
 
@@ -117,13 +116,18 @@ void showNewData() {
 // Right turn had some instance where it was requesting 35deg rather than -35deg. Must have gotten in the wrong bounds
 void absToAngle() {
   // left turn side is towards 4069. Right turn side is towards 131. Less than 131 is a gltich on left turn side. 
-  if(abs_pos<=65 || abs_pos>4069){ //less than 65 (inclusive) or 4069+. This only happens on left turn (i.e. -35 side)
-    abs_pos = 4069;
-    currentHeading = abs_pos*0.0178 - 37.3; 
+  if(abs_pos>3995){ //less than 65 (inclusive) or 4069+. This only happens on left turn (i.e. -35 side)
+    abs_pos = 3995;
+    currentHeading = abs_pos*0.0176 - 35.3; 
   }
 
-  if(131 <= abs_pos && abs_pos <= 4069){ //131 to 4069 inclusive equating to -35deg (right turn) and 35deg (left turn)
-    currentHeading = abs_pos*0.0178 - 37.3; 
+  if(abs_pos<15){ //less than 65 (inclusive) or 4069+. This only happens on left turn (i.e. -35 side)
+    abs_pos = 15;
+    currentHeading = abs_pos*0.0176 - 35.3; 
+  }
+
+  if(15 <= abs_pos && abs_pos <= 3995){ //131 to 4069 inclusive equating to -35deg (right turn) and 35deg (left turn)
+    currentHeading = abs_pos*0.0176 - 35.3; 
   }
 }
 
@@ -153,7 +157,8 @@ void checkSwitchPosition(){
 void setup() {
   Serial2.begin(115200); //RS485 to TTL converter (Absolute Position Sensor Data)
   roboclaw.begin(115200); //Roboclaw DC Motor Controller 
-  
+  Serial.begin(115200);
+
   pinMode(switchPin, INPUT);
 
   PID1.SetMode(AUTOMATIC);              
@@ -186,17 +191,25 @@ void loop() {
 
   absToAngle(); //convert absolute position to heading angle in degrees
 
-  if(mode == 0){ //towards teensy - null mode
-    debug_data.data[0] = currentHeading; //current heading - name this angle aswell
-    debug_data.data[1] = steering_angle; //desired heading
-    debug_data.data[2] = abs_pos; //Raw absolute position of encoder
-    debug_data.data[3] = Output; 
-    debug_pub.publish(&debug_data);
+  if(mode == 0){ //towards teensy - debug mode
+    // debug_data.data[0] = currentHeading; //current heading - name this angle aswell
+    // debug_data.data[1] = steering_angle; //desired heading
+    // debug_data.data[2] = abs_pos; //Raw absolute position of encoder
+    // debug_data.data[3] = Output; 
+    // debug_pub.publish(&debug_data);
+
+    Setpoint = 0;
+    Input = currentHeading; 
+
+    PID1.Compute();
+    driveMotor();
+    // Serial.print("Setpoint: "); Serial.println(Setpoint);
+    // Serial.print("Current Heading: "); Serial.println(currentHeading);
   }
 
   if(mode == 1){
     debug_data.data[0] = currentHeading; //current heading - name this angle aswell
-    debug_data.data[1] = steering_angle; //desired heading
+    debug_data.data[1] = Setpoint; //desired heading
     debug_data.data[2] = abs_pos; //Raw absolute position of encoder
     debug_data.data[3] = Output; //PWM
     debug_pub.publish(&debug_data); //publish current heading before movement
