@@ -4,7 +4,6 @@
  *  3. Shift out old bytes per markd833? 
  *  4. Angular rate required or not?
  *  5. PID Controller - implement integral term reset to avoid saturation in case of no movement for long durations. May not be a concern depending on Ki? 
- *  6. When both VESC and Roboclaw active, steering controller performance seems to decline (increased oscillations). Could be related to the noise? on TX. Digital isolator?  
  *  7. Benefits of using whole range of PWM
  */
 
@@ -27,17 +26,33 @@ byte numReceived = 0;
 boolean newData = false;
 double abs_pos = 0; //raw position from encoder
 double currentHeading = 0; //calculated current heading of robot
-int mode = 0; //for onboard switch
 float steering_angle; //variable used in ackermann callback
 
 double Kp=14, Ki=3, Kd=0; //PID Gains
-double Setpoint = 0, Input, Output; //PID variables 
+double Setpoint = 0, Input = 0, Output = 0; //PID variables 
 PID PID1(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT); //PID Setup
 
 RoboClaw roboclaw(&Serial3,10000); //DC Motor Controller Setup
 #define address 0x80
 
-const int switchPin = 5;
+enum SwitchStatus {
+  SWITCH_OFF,
+  SWITCH_ON,
+};
+
+enum SerialStatus {
+  SERIAL_OFF,
+  SERIAL_ON,
+};
+
+SerialStatus serialState; //how to init
+bool lastSerialState = SERIAL_ON;
+const unsigned long serialTimeout = 1000; // Timeout in milliseconds
+unsigned long lastSerialTime = 0;
+
+const int switchPin = 5; //for onboard switch
+volatile bool modeChanged = true;
+volatile SwitchStatus switchState;
 
 const float MIN_STEERING_ANGLE = -30;       // min steering angle (0-180)
 const float MAX_STEERING_ANGLE = 30;      // max steering angle (0-180)
@@ -73,7 +88,10 @@ void recvBytesWithStartEndMarkers() {
   byte rb;
   
   while (Serial2.available() > 0 && newData == false) {
+    serialState = SERIAL_ON;
+    lastSerialTime = millis();
     rb = Serial2.read();
+
     if (recvInProgress == true) {
       if (rb != startMarker) { 
           receivedBytes[ndx] = rb;
@@ -96,11 +114,21 @@ void recvBytesWithStartEndMarkers() {
         recvInProgress = true;
     }
   }
+
+  // Check for serial inactivity
+  if (millis() - lastSerialTime > serialTimeout && serialState == SERIAL_ON) {
+      serialState = SERIAL_OFF;
+  }
+  
+  if (serialState != lastSerialState) {
+    modeChanged = true;
+    lastSerialState = serialState;
+  }
 }
 
 void showNewData() {
   if (newData == true) {
-    // UNCOMMENT BELOW TO PRINT ABS SENSOR DATA
+    // UNCOMMENT BELOW TO PRINT SENSOR DATA
     // Serial.print("This just in (HEX values)... ");
     // for (byte n = 0; n < numReceived; n++) {
     //     Serial.print(receivedBytes[n], HEX);
@@ -118,17 +146,17 @@ void absToAngle() {
   // left turn side is towards 4069. Right turn side is towards 131. Less than 131 is a gltich on left turn side. 
   if(abs_pos>3995){ //less than 65 (inclusive) or 4069+. This only happens on left turn (i.e. -35 side)
     abs_pos = 3995;
-    currentHeading = abs_pos*0.0176 - 35.3; 
   }
 
   if(abs_pos<15){ //less than 65 (inclusive) or 4069+. This only happens on left turn (i.e. -35 side)
     abs_pos = 15;
-    currentHeading = abs_pos*0.0176 - 35.3; 
   }
 
-  if(15 <= abs_pos && abs_pos <= 3995){ //131 to 4069 inclusive equating to -35deg (right turn) and 35deg (left turn)
-    currentHeading = abs_pos*0.0176 - 35.3; 
-  }
+  // if(15 <= abs_pos && abs_pos <= 3995){ //131 to 4069 inclusive equating to -35deg (right turn) and 35deg (left turn)
+  //   currentHeading = abs_pos*0.0176 - 35.3; 
+  // }
+  currentHeading = abs_pos*0.0176 - 35.3; 
+  Input = currentHeading;
 }
 
 void driveMotor(){
@@ -143,25 +171,28 @@ void driveMotor(){
   }
 }
 
-void checkSwitchPosition(){
-  if(digitalRead(switchPin) == HIGH){
-    mode = 1;
+//Interrupt service routine for switch
+void switchPosition(){
+  modeChanged = true;
+
+  if(digitalRead(switchPin) == HIGH) {
+    switchState = SWITCH_ON;
   }
-  
-  //Left position of switch for off (towards teensy on breadboard)
-  if(digitalRead(switchPin) == LOW){
-    mode = 0;
+
+  if(digitalRead(switchPin) == LOW) {
+    switchState = SWITCH_OFF;
   }
 }
 
 void setup() {
-  Serial2.begin(115200); //RS485 to TTL converter (Absolute Position Sensor Data)
+  Serial2.begin(115200); //RS485 to TTL converter (Absolute Position Encoder Sensor Data)
   roboclaw.begin(115200); //Roboclaw DC Motor Controller 
-  Serial.begin(115200);
+  Serial.begin(115200); //Serial start for computer (ROS)
 
   pinMode(switchPin, INPUT);
+  attachInterrupt(digitalPinToInterrupt(switchPin), switchPosition, CHANGE);
+  switchPosition(); //initalization of switch position
 
-  PID1.SetMode(AUTOMATIC);              
   PID1.SetOutputLimits(-60, 60); //True limit is 127 but don't want to go that fast, this is around 30% duty cycle.. may need to inverse this due to swapping angles
   PID1.SetSampleTime(10); //10ms
 
@@ -183,41 +214,31 @@ void setup() {
 }
 
 void loop() {
-  
   recvBytesWithStartEndMarkers(); //absolute position sensor raw data
   showNewData(); //abs_pos update
-
-  checkSwitchPosition(); //switch mode check: 0 or 1
-
   absToAngle(); //convert absolute position to heading angle in degrees
 
-  if(mode == 0){ //towards teensy - debug mode
-    // debug_data.data[0] = currentHeading; //current heading - name this angle aswell
-    // debug_data.data[1] = steering_angle; //desired heading
-    // debug_data.data[2] = abs_pos; //Raw absolute position of encoder
-    // debug_data.data[3] = Output; 
-    // debug_pub.publish(&debug_data);
+  if(modeChanged) {
+    modeChanged = false; //reset flag
 
-    Setpoint = 0;
-    Input = currentHeading; 
+    if(switchState == SWITCH_OFF || serialState == SERIAL_OFF){ //switch towards teensy - shutdown mode
+      PID1.SetMode(MANUAL); //Set to manual i.e. turn off PID
+      Output = 0;
+    }
 
-    PID1.Compute();
-    driveMotor();
-    // Serial.print("Setpoint: "); Serial.println(Setpoint);
-    // Serial.print("Current Heading: "); Serial.println(currentHeading);
+    if(switchState == SWITCH_ON && serialState == SERIAL_ON){ //switch away from teensy - regular operation   
+      PID1.SetMode(AUTOMATIC); //Set to automatic, initialization occurs to ensure no bump to old 
+    }
   }
 
-  if(mode == 1){
-    debug_data.data[0] = currentHeading; //current heading - name this angle aswell
-    debug_data.data[1] = Setpoint; //desired heading
-    debug_data.data[2] = abs_pos; //Raw absolute position of encoder
-    debug_data.data[3] = Output; //PWM
-    debug_pub.publish(&debug_data); //publish current heading before movement
-    
-    Input = currentHeading; 
+  PID1.Compute(); //if mode is manual it won't modify Output var 
+  driveMotor(); // if mode is manual, output overridden to 0
 
-    PID1.Compute();
-    driveMotor();
-  }
+  debug_data.data[0] = currentHeading; //current heading - confirms encoder good
+  debug_data.data[1] = steering_angle; //desired heading - confirms ackermann output good
+  debug_data.data[2] = (serialState == SERIAL_ON); //state of serial port - testing
+  debug_data.data[3] = (switchState == SWITCH_ON); //i.e. motor state
+  debug_pub.publish(&debug_data);
+
   nh.spinOnce(); //spin the ros node
 }
