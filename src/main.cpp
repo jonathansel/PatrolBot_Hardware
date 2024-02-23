@@ -144,18 +144,18 @@ void showNewData() {
 // Right turn had some instance where it was requesting 35deg rather than -35deg. Must have gotten in the wrong bounds
 void absToAngle() {
   // left turn side is towards 4069. Right turn side is towards 131. Less than 131 is a gltich on left turn side. 
-  if(abs_pos>3995){ //less than 65 (inclusive) or 4069+. This only happens on left turn (i.e. -35 side)
-    abs_pos = 3995;
+  if(abs_pos>3943){ //less than 65 (inclusive) or 4069+. This only happens on left turn (i.e. -35 side)
+    abs_pos = 3943;
   }
 
-  if(abs_pos<15){ //less than 65 (inclusive) or 4069+. This only happens on left turn (i.e. -35 side)
-    abs_pos = 15;
+  if(abs_pos<12){ //less than 65 (inclusive) or 4069+. This only happens on left turn (i.e. -35 side)
+    abs_pos = 12;
   }
 
   // if(15 <= abs_pos && abs_pos <= 3995){ //131 to 4069 inclusive equating to -35deg (right turn) and 35deg (left turn)
   //   currentHeading = abs_pos*0.0176 - 35.3; 
   // }
-  currentHeading = abs_pos*0.0176 - 35.3; 
+  currentHeading = abs_pos*0.0178 - 35.2; 
   Input = currentHeading;
 }
 
